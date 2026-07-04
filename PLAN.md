@@ -74,12 +74,12 @@ Status ledger:
 
 | Status | Type | Item | Evidence / Gap |
 | --- | --- | --- | --- |
-| Incomplete | Work | 1A: `Vfs` trait + error/metadata types | Missing: `src/vfs/mod.rs` with trait and types. |
-| Incomplete | Work | 1B: `InMemoryVfs` with quota enforcement | Missing: implementation and unit tests. |
-| Incomplete | Work | 1C: public conformance suite | Missing: `src/vfs/conformance.rs` runnable against a factory. |
-| Incomplete | Work | 1D: crate scaffolding, lints, CI | Missing: CI workflow running test + clippy. |
-| Incomplete | Test | proptest op-sequence and quota invariants | Missing: proptest suite. |
-| Incomplete | Gate | conformance suite green on `InMemoryVfs` | Missing: passing CI run. |
+| Complete | Work | 1A: `Vfs` trait + error/metadata types | `src/vfs/mod.rs`: trait, errno enum, `Metadata`, `OpenMode`, public `FileHandle::new`. |
+| Complete | Work | 1B: `InMemoryVfs` with quota enforcement | `src/vfs/mem.rs`: inode-based handles (POSIX unlink-while-open semantics), dirs count against max_files. |
+| Complete | Work | 1C: public conformance suite | `src/vfs/conformance.rs`: 14 cases incl. quota accounting, handle identity, cross-handle visibility; factory takes explicit `VfsQuota`. |
+| Complete | Work | 1D: crate scaffolding, lints, CI | `.github/workflows/ci.yml`: test --all-features + clippy -D warnings. |
+| Complete | Test | proptest op-sequence and quota invariants | `tests/vfs_proptest.rs`: model-based (HashMap mirror), exact quota accounting asserted per op. |
+| Complete | Gate | conformance suite green on `InMemoryVfs` | Reviewer approved after 3 rounds; local `cargo test --all-features` + clippy green. |
 
 ## Phase 2: Shell lexer and parser
 
