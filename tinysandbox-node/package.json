@@ -36,6 +36,7 @@
     "tsx": "^4.23.0"
   },
   "files": [
+    "README.md",
     "index.js",
     "index.d.ts",
     "native.cjs",
