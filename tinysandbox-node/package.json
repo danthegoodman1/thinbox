@@ -1,0 +1,48 @@
+{
+  "name": "tinysandbox",
+  "version": "0.3.0",
+  "description": "Node.js bindings for the tinysandbox in-process AI agent sandbox",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "napi build --platform --release --js native.cjs --dts native.d.ts",
+    "test": "npm run build && node --import tsx --test __test__/*.mjs",
+    "examples": "tsx examples/quickstart.ts && tsx examples/custom_command.ts && tsx examples/js_scripts.ts && tsx examples/js_vfs.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danthegoodman1/tinysandbox.git",
+    "directory": "tinysandbox-node"
+  },
+  "keywords": [
+    "sandbox",
+    "agent",
+    "shell",
+    "vfs",
+    "quickjs"
+  ],
+  "author": "Dan Goodman",
+  "license": "MIT OR Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "bugs": {
+    "url": "https://github.com/danthegoodman1/tinysandbox/issues"
+  },
+  "homepage": "https://github.com/danthegoodman1/tinysandbox#readme",
+  "devDependencies": {
+    "@napi-rs/cli": "^3.7.2",
+    "@types/node": "^26.1.0",
+    "tsx": "^4.23.0"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "native.cjs",
+    "native.d.ts"
+  ],
+  "napi": {
+    "binaryName": "tinysandbox-node",
+    "packageName": "tinysandbox"
+  }
+}

@@ -133,6 +133,16 @@ impl Sandbox {
         Arc::clone(&self.vfs)
     }
 
+    /// Returns an async filesystem facade rooted at the sandbox's base cwd.
+    pub fn fs(&self) -> Fs {
+        let session = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+        Fs::new(
+            Arc::clone(&self.vfs),
+            Arc::clone(&self.command_names),
+            session.cwd.clone(),
+        )
+    }
+
     /// Returns aggregate sandbox statistics.
     pub fn stats(&self) -> SandboxStats {
         SandboxStats {

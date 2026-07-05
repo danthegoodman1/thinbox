@@ -9,6 +9,8 @@ An ultra-minimal, Linux-like sandbox for AI agents — a shell, coreutils, a
 filesystem, and a secure JavaScript runtime in a single Rust crate, with no
 containers, no VMs, and no access to the host.
 
+#### Rust
+
 ```rust no_run
 use tinysandbox::sandbox::Sandbox;
 
@@ -28,24 +30,40 @@ async fn main() {
 }
 ```
 
+#### TypeScript
+
+```ts
+import { Sandbox } from 'tinysandbox'
+
+const sandbox = new Sandbox()
+
+await sandbox.exec('mkdir /workspace')
+await sandbox.exec("echo 'hello from the sandbox' > /workspace/greeting.txt")
+
+const result = await sandbox.exec('cat /workspace/greeting.txt | grep -c sandbox')
+console.assert(result.stdout === '1\n')
+```
+
 ## Table of contents
 
-- [Why](#why)
-- [Quickstart](#quickstart)
-- [What's inside](#whats-inside)
-  - [Shell](#shell)
-  - [Builtins](#builtins)
-  - [JavaScript runtime](#javascript-runtime)
-- [Custom commands](#custom-commands)
-- [Bring your own VFS](#bring-your-own-vfs)
-- [Snapshots](#snapshots)
-- [Limits and observability](#limits-and-observability)
-- [Security model](#security-model)
-- [Comparison with just-bash](#comparison-with-just-bash)
-- [Feature flags](#feature-flags)
-- [Examples](#examples)
-- [Roadmap](#roadmap)
-- [License](#license)
+- [tinysandbox](#tinysandbox)
+  - [Table of contents](#table-of-contents)
+  - [Why](#why)
+  - [Quickstart](#quickstart)
+  - [What's inside](#whats-inside)
+    - [Shell](#shell)
+    - [Builtins](#builtins)
+    - [JavaScript runtime](#javascript-runtime)
+  - [Custom commands](#custom-commands)
+  - [Bring your own VFS](#bring-your-own-vfs)
+  - [Snapshots](#snapshots)
+  - [Limits and observability](#limits-and-observability)
+  - [Security model](#security-model)
+  - [Comparison with just-bash](#comparison-with-just-bash)
+  - [Feature flags](#feature-flags)
+  - [Examples](#examples)
+  - [Roadmap](#roadmap)
+  - [License](#license)
 
 ## Why
 
@@ -79,7 +97,10 @@ that actually runs untrusted code: agent-authored JavaScript. The result:
 
 ```bash
 cargo add tinysandbox tokio
+npm install tinysandbox
 ```
+
+#### Rust
 
 ```rust no_run
 use tinysandbox::sandbox::Sandbox;
@@ -108,8 +129,32 @@ async fn main() {
 }
 ```
 
+#### TypeScript
+
+```ts
+import { Sandbox } from 'tinysandbox'
+
+const sandbox = new Sandbox()
+
+// By default, each exec starts from the builder's cwd/env. The VFS persists.
+await sandbox.exec('mkdir -p /workspace/data')
+await sandbox.exec("echo 'alpha\nbeta\nalpha' > /workspace/data/words.txt")
+
+// GNU-faithful output shapes, down to wc padding stdin counts to width 7.
+const result = await sandbox.exec('sort -u /workspace/data/words.txt | wc -l')
+console.assert(result.stdout === '      2\n')
+console.assert(result.exitCode === 0)
+
+// JavaScript with a Node-compatible fs API, sandboxed under Wasmtime.
+await sandbox.exec(`echo 'const fs = require("fs"); console.log(fs.readFileSync("/workspace/data/words.txt", "utf8").length)' > /workspace/count.js`)
+const counted = await sandbox.exec('js /workspace/count.js')
+console.assert(counted.stdout === '17\n')
+```
+
 The host can also work with the filesystem directly — useful for seeding
 input files or reading results without going through the shell:
+
+#### Rust
 
 ```rust no_run
 use tinysandbox::sandbox::Sandbox;
@@ -123,6 +168,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     vfs.close(handle)?;
     Ok(())
 }
+```
+
+#### TypeScript
+
+```ts
+import { Sandbox } from 'tinysandbox'
+
+const sandbox = new Sandbox()
+await sandbox.fs.mkdir('/workspace')
+await sandbox.fs.writeFile('/workspace/report.txt', Buffer.from('direct host access'))
 ```
 
 ## What's inside
@@ -190,6 +245,8 @@ shows up in `/bin`, resolves via `which`, and composes in pipelines. A
 command is just an async function from `CommandContext` (args, env, cwd,
 stdio streams, a VFS handle, limits) to an exit code:
 
+#### Rust
+
 ```rust no_run
 use tinysandbox::sandbox::{CommandContext, CommandResult, Sandbox};
 use tokio::io::AsyncWriteExt;
@@ -209,6 +266,24 @@ async fn main() {
 }
 ```
 
+#### TypeScript
+
+```ts
+import { Sandbox } from 'tinysandbox'
+
+const sandbox = new Sandbox({
+  commands: {
+    greet: async ({ args }) => {
+      const name = args[0] ?? 'world'
+      return { stdout: Buffer.from(`hello ${name}\n`) }
+    }
+  }
+})
+
+const result = await sandbox.exec('greet agent | wc -w')
+console.assert(result.stdout === '      2\n')
+```
+
 This is the intended way to expose tools to an agent — file converters,
 linters, API bridges — while the sandbox contains everything the agent's
 own code does with the results.
@@ -226,6 +301,8 @@ implementation opts into the in-memory fast path via `is_fast()`.
 Attach it in the builder and the whole sandbox — shell, builtins, JS
 scripts, and direct host access — runs against it:
 
+#### Rust
+
 ```rust ignore
 use std::sync::Arc;
 use tinysandbox::sandbox::Sandbox;
@@ -239,10 +316,22 @@ let vfs = Arc::new(MyVfs::connect("s3://agent-42-workspace")?);
 let sandbox = Sandbox::builder().vfs_arc(Arc::clone(&vfs)).build();
 ```
 
+#### TypeScript
+
+```ts
+import { Sandbox } from 'tinysandbox'
+
+const sandbox = new Sandbox({
+  vfs: MyVfs.connect('s3://agent-42-workspace')
+})
+```
+
 The crate ships the same conformance suite that validates `InMemoryVfs`, so
 you can prove your implementation behaves like a POSIX filesystem —
 open-mode enforcement, rename-over-existing, unlink-while-open handle
 semantics, quota accounting, path containment, and more:
+
+#### Rust
 
 ```rust ignore
 #[test]
@@ -250,6 +339,18 @@ fn my_vfs_conforms() {
     tinysandbox::vfs::conformance::run(|quota| MyVfs::new(quota));
 }
 ```
+
+#### TypeScript
+
+```ts
+import { runConformance } from 'tinysandbox'
+
+await runConformance((quota) => new MyVfs(quota))
+```
+
+The JavaScript conformance runner covers the core VFS contract. Snapshot
+conformance is Rust-only for now because `VfsSnapshot` uses an associated
+snapshot type that does not map cleanly onto the callback-object adapter.
 
 See the `tinysandbox::vfs` rustdoc for the full trait contract (errno
 expectations per method, quota semantics, handle identity rules).
@@ -259,6 +360,8 @@ expectations per method, quota semantics, handle identity rules).
 `InMemoryVfs` supports cheap copy-on-write snapshots for rollback and
 branching. A snapshot captures path-visible filesystem contents, not open file
 handles; restoring one invalidates handles opened before the restore.
+
+#### Rust
 
 ```rust
 use tinysandbox::vfs::{InMemoryVfs, OpenMode, Vfs, VfsQuota, VfsSnapshot};
@@ -279,8 +382,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+#### TypeScript
+
+The Node binding exposes live VFS operations and JS-backed VFS adapters.
+Snapshot capture/restore/branch is currently Rust-only.
+
 `Sandbox::vfs()` returns `Arc<dyn Vfs>`, so snapshot-aware callers should keep
 their own concrete handle and pass a clone into the builder:
+
+#### Rust
 
 ```rust no_run
 use std::sync::Arc;
@@ -300,12 +410,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+#### TypeScript
+
+Snapshot-aware workflows should keep this part in Rust for now. TypeScript
+VFS adapters can still validate the non-snapshot contract with
+`runConformance(vfsFactory)`.
+
 ## Limits and observability
 
 Every `Sandbox` enforces wall-clock timeouts (exit 124, like GNU `timeout`),
 stdout/stderr caps with head+tail truncation, a per-exec command budget,
 VFS byte/file quotas (surfacing as `ENOSPC`), and a wasm memory cap for JS.
 All configurable via `Limits`:
+
+#### Rust
 
 ```rust no_run
 use std::time::Duration;
@@ -320,6 +438,19 @@ fn main() {
         })
         .build();
 }
+```
+
+#### TypeScript
+
+```ts
+import { Sandbox } from 'tinysandbox'
+
+const sandbox = new Sandbox({
+  limits: {
+    wallTimeMs: 5000,
+    wasmMemoryBytes: 32 * 1024 * 1024
+  }
+})
 ```
 
 `ExecResult` carries per-run metrics (wall time, per-command timings, pipe
@@ -364,11 +495,10 @@ but the designs differ in ways that matter:
   guest, with hard memory and CPU limits enforced by Wasmtime. just-bash
   interprets the shell and its commands in the host JavaScript engine and
   relies on language-level hardening against engine breakouts.
-- **Host language.** tinysandbox is a Rust crate (Node.js bindings are on
-  the roadmap); just-bash is TypeScript and runs in Node or the browser. If
-  your stack is JS-only today, just-bash is the natural pick; if you want
-  native performance, a typed VFS trait, or to embed in a Rust service,
-  that's tinysandbox.
+- **Host language.** tinysandbox is a Rust crate with Node.js bindings;
+  just-bash is TypeScript and runs in Node or the browser. If you want native
+  performance, a typed VFS trait, Rust embedding, or the same sandbox from
+  Node, that's tinysandbox.
 
 ## Feature flags
 
@@ -387,10 +517,18 @@ Runnable with `cargo run --example <name>`:
 - [`js_scripts`](https://github.com/danthegoodman1/tinysandbox/blob/main/examples/js_scripts.rs) — multi-file JS with `require`,
   the `fs` API, and a look at limits and metrics
 
+Runnable with `npm --prefix tinysandbox-node run examples` after the package
+dependencies are installed:
+
+- `quickstart.ts` — sessions, pipelines, redirects, and host reads
+- `custom_command.ts` — registering a TypeScript host command
+- `js_scripts.ts` — multi-file sandboxed JS with limits and metrics
+- `js_vfs.ts` — TypeScript-backed VFS callbacks plus `runConformance`
+
 ## Roadmap
 
-- Node.js bindings (napi-rs): the whole sandbox — including VFS
-  implementations written in JavaScript — usable from Node
+- Prebuilt Node binary publishing is planned for a follow-up release. Local
+  development builds use `npm --prefix tinysandbox-node run build`.
 
 ## License
 

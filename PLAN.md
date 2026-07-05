@@ -300,10 +300,11 @@ Scope:
   equivalent JS version, shown after the Rust one under lower-tier
   sub-headers (e.g. "Rust" / "JavaScript") so both audiences can skim
   their language; every on-disk example in `examples/` gains an equivalent
-  runnable JS example (e.g. `tinysandbox-node/examples/quickstart.mjs`,
-  `custom_command.mjs`, `js_scripts.mjs`, plus a JS-VFS example), verified
-  runnable against the locally built binding. README install/quickstart
-  covers both `cargo add` and `npm install`.
+  runnable TypeScript example (e.g. `tinysandbox-node/examples/quickstart.ts`,
+  `custom_command.ts`, `js_scripts.ts`, plus a TS-VFS example), verified
+  runnable against the locally built binding (e.g. via `node --experimental-strip-types`
+  or `tsx`). README install/quickstart covers both `cargo add` and
+  `npm install`; README JS snippets use TypeScript.
 
 Out of scope:
 - Prebuilt binary distribution matrix / npm publish automation (document
@@ -312,8 +313,9 @@ Out of scope:
 Completion gate:
 `npm test` green against a locally built binding, including the conformance
 suite running against a JS-implemented VFS and an end-to-end
-`exec("cat x | js t.js")` from Node; README shows Rust + JS variants for
-every example and all on-disk JS examples run against the built binding.
+`exec("cat x | js t.js")` from Node; README shows Rust + TypeScript variants
+for every example and all on-disk TypeScript examples run against the built
+binding.
 
 Testing plan:
 - node:test suite: sandbox lifecycle, exec output/exit codes, direct VFS
@@ -325,13 +327,13 @@ Status ledger:
 
 | Status | Type | Item | Evidence / Gap |
 | --- | --- | --- | --- |
-| Incomplete | Work | 6A: workspace split, napi-rs crate, npm scaffold | Missing: `tinysandbox-node/` building locally. |
-| Incomplete | Work | 6B: Sandbox/exec/VFS/limits bindings | Missing: binding impl + node:test coverage. |
-| Incomplete | Work | 6C: `JsVfs` threadsafe-function adapter | Missing: adapter + deadlock-freedom test. |
-| Incomplete | Work | 6D: conformance runner exported to JS | Missing: JS-VFS conformance run green. |
-| Incomplete | Work | 6E: README Rust/JS example parity + on-disk JS examples | Missing: JS variants in README + runnable `.mjs` examples. |
-| Incomplete | Test | node:test suite incl. e2e pipeline from Node | Missing: `tinysandbox-node/__test__/`. |
-| Incomplete | Gate | `npm test` green with JS VFS conformance | Missing: passing run. |
+| Complete | Work | 6A: workspace split, napi-rs crate, npm scaffold | Workspace with `tinysandbox-node/` cdylib (`publish = false`); npm package with `files` allowlist; core `cargo publish --dry-run` still exactly 39 files. |
+| Complete | Work | 6B: Sandbox/exec/VFS/limits bindings | Full `ExecResult`/`Limits` mapping (camelCase, ms/bytes units); async `stats()`; input validation (finite non-negative `wallTimeMs`, `MAX_SAFE_INTEGER` caps) returns JS errors instead of aborting; `sandbox.fs` cached but resolves session cwd per operation. |
+| Complete | Work | 6C: `JsVfs` threadsafe-function adapter | Weak TSFNs (natural event-loop exit, probe: 61 ms), current-thread runtime, `Buffer` payloads both directions, code-first errno with EINVAL fallback (no substring scanning). Reviewer probes: concurrent execs sharing one VFS, re-entrant commands, never-resolving callbacks — all deadlock-free. |
+| Complete | Work | 6D: conformance runner exported to JS | Native `runConformance` wraps the JS factory into `JsVfs` and runs the real 15-case crate suite; reviewer verified it fails sabotaged VFSs (unlink-while-open, path normalization); shipped TS memory-VFS example passes. |
+| Complete | Work | 6E: README Rust/TS example parity + on-disk TS examples | README pairs every Rust snippet with a TypeScript variant (reviewer executed them); four runnable `.ts` examples via tsx; TOC trimmed to h3 (clippy doc lint clean). |
+| Complete | Test | node:test suite incl. e2e pipeline from Node | 17/17 node:test green without `--test-force-exit`, incl. e2e `cat x \| js t.js`, JsVfs stats deadlock regression, persistent-cwd cached-fs regression, oversized-number rejection, natural-exit test. CI node job builds and runs tests + examples. |
+| Complete | Gate | `npm test` green with JS VFS conformance | Reviewer approved after 2 fix rounds (3 blockers + 5 majors, then 1 blocker + 2 minors). Workspace clippy/tests/dry-run green alongside npm gates. |
 
 ## Phase 7: Streaming pipeline and redirect I/O
 
