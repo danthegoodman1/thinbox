@@ -1,6 +1,7 @@
 # tinysandbox
 
 [![crates.io](https://img.shields.io/crates/v/tinysandbox.svg)](https://crates.io/crates/tinysandbox)
+[![npm](https://img.shields.io/npm/v/@tinysandbox/tinysandbox.svg)](https://www.npmjs.com/package/@tinysandbox/tinysandbox)
 [![docs.rs](https://docs.rs/tinysandbox/badge.svg)](https://docs.rs/tinysandbox)
 [![CI](https://github.com/danthegoodman1/tinysandbox/actions/workflows/ci.yml/badge.svg)](https://github.com/danthegoodman1/tinysandbox/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
@@ -97,7 +98,7 @@ that actually runs untrusted code: agent-authored JavaScript. The result:
 
 ```bash
 cargo add tinysandbox tokio
-npm install @tinysandbox/tinysandbox
+npm i @tinysandbox/tinysandbox
 ```
 
 #### Rust
