@@ -4,6 +4,7 @@
 
 #[cfg(feature = "js")]
 pub mod js;
+pub mod prompts;
 pub mod sandbox;
 pub mod shell;
 pub mod vfs;

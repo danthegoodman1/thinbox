@@ -42,6 +42,25 @@ type JsVfsFactoryCallback =
     Arc<ThreadsafeFunction<VfsQuotaJs, Promise<JsVfsHandle>, (VfsQuotaJs,), Status, false, true>>;
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
+#[napi]
+pub const PROMPT_OVERVIEW: &str = tinysandbox::prompts::OVERVIEW;
+#[napi]
+pub const PROMPT_SHELL: &str = tinysandbox::prompts::SHELL;
+#[napi]
+pub const PROMPT_BUILTINS: &str = tinysandbox::prompts::BUILTINS;
+#[napi]
+pub const PROMPT_JQ: &str = tinysandbox::prompts::JQ;
+#[napi]
+pub const PROMPT_JS: &str = tinysandbox::prompts::JS;
+#[napi]
+pub const PROMPT_SYSCALLS: &str = tinysandbox::prompts::SYSCALLS;
+#[napi]
+pub const PROMPT_FETCH: &str = tinysandbox::prompts::FETCH;
+#[napi]
+pub const PROMPT_SESSION_EPHEMERAL: &str = tinysandbox::prompts::SESSION_EPHEMERAL;
+#[napi]
+pub const PROMPT_SESSION_PERSISTENT: &str = tinysandbox::prompts::SESSION_PERSISTENT;
+
 #[napi(js_name = "NativeSandbox")]
 pub struct Sandbox {
     // Napi owns this Arc through the JS object finalizer, so the final drop of

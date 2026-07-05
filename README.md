@@ -57,6 +57,7 @@ console.assert(result.stdout === '1\n')
   - [Shell](#shell)
   - [Builtins](#builtins)
   - [JavaScript runtime](#javascript-runtime)
+- [Prompt chunks](#prompt-chunks)
 - [Custom commands](#custom-commands)
   - [Rust](#rust-3)
   - [TypeScript](#typescript-3)
@@ -299,6 +300,50 @@ microtasks drain before exit, and `fetch` is available only through an
 embedder-granted handler. All file access goes through the same VFS and quotas
 as the shell. Known deviations (fetch subset details, stack-frame naming,
 line-1 column offsets) are documented in the `js` module docs.
+
+## Prompt chunks
+
+Both packages export ready-made system-prompt text describing the sandbox to
+an agent. Each chunk is a short, self-contained block covering one part of
+the environment — they assume the model already knows bash, coreutils, jq,
+and Node, and only state where this environment differs. Mix the chunks that
+match your configuration and join them with blank lines:
+
+#### Rust
+
+```rust
+let system_prompt = [
+    tinysandbox::prompts::OVERVIEW,
+    tinysandbox::prompts::SHELL,
+    tinysandbox::prompts::BUILTINS,
+    tinysandbox::prompts::SESSION_EPHEMERAL,
+    tinysandbox::prompts::JS,
+]
+.join("\n\n");
+```
+
+#### TypeScript
+
+```ts
+import { prompts } from '@tinysandbox/tinysandbox'
+
+const systemPrompt = [
+  prompts.overview,
+  prompts.shell,
+  prompts.builtins,
+  prompts.sessionEphemeral,
+  prompts.js
+].join('\n\n')
+```
+
+Available chunks: `OVERVIEW`/`overview`, `SHELL`/`shell`,
+`BUILTINS`/`builtins`, `JQ`/`jq`, `JS`/`js`, `SYSCALLS`/`syscalls`,
+`FETCH`/`fetch`, and `SESSION_EPHEMERAL`/`sessionEphemeral` or
+`SESSION_PERSISTENT`/`sessionPersistent` (pick the one matching
+`persist_session`). Skip `JS` when the `js` feature is off, `SYSCALLS` when
+no syscalls are registered, and `FETCH` when no fetch handler is set. Tests
+pin the builtins chunk to the actual command registry so the text cannot
+drift from the sandbox.
 
 ## Custom commands
 

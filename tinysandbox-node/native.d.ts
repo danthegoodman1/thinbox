@@ -110,6 +110,24 @@ export interface OpenModeJs {
   append?: boolean
 }
 
+export const PROMPT_BUILTINS: string
+
+export const PROMPT_FETCH: string
+
+export const PROMPT_JQ: string
+
+export const PROMPT_JS: string
+
+export const PROMPT_OVERVIEW: string
+
+export const PROMPT_SESSION_EPHEMERAL: string
+
+export const PROMPT_SESSION_PERSISTENT: string
+
+export const PROMPT_SHELL: string
+
+export const PROMPT_SYSCALLS: string
+
 export declare function runConformance(factory: (arg: [VfsQuotaJs]) => Promise<JsVfsHandle>): Promise<unknown>
 
 export interface SandboxStats {

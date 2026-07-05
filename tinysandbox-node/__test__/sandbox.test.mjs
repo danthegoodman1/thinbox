@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Sandbox, runConformance } from '../index.js'
+import { Sandbox, prompts, runConformance } from '../index.js'
 import { createMemoryVfs } from './helpers.mjs'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -388,6 +388,33 @@ test('JS VFS adapters do not keep child processes alive', async () => {
   })
   const result = await waitForChild(child, 2000)
   assert.equal(result.code, 0, result.stderr)
+})
+
+test('prompt chunks map to the matching native constants', async () => {
+  // Spot-checks distinctive content per chunk so a crossed mapping in
+  // index.js (e.g. prompts.shell pointing at the builtins text) is caught.
+  const distinctive = {
+    overview: 'virtual filesystem',
+    shell: 'command substitution',
+    builtins: 'GNU counterparts',
+    jq: '--argjson',
+    js: 'readFileSync',
+    syscalls: 'Object.keys(sandbox)',
+    fetch: 'WHATWG',
+    sessionEphemeral: 'do not carry over',
+    sessionPersistent: 'persist across'
+  }
+  assert.deepEqual(Object.keys(prompts).sort(), Object.keys(distinctive).sort())
+  for (const [key, marker] of Object.entries(distinctive)) {
+    assert.ok(prompts[key].includes(marker), `prompts.${key} should mention '${marker}'`)
+  }
+
+  // The builtins chunk must list exactly what `ls /bin` reports, minus `js`
+  // which is introduced by the js chunk.
+  const listing = (await new Sandbox().exec('ls /bin')).stdout
+  const registered = listing.split('\n').filter((name) => name && name !== 'js')
+  const commandLine = prompts.builtins.split('\n').find((line) => line.startsWith('cat '))
+  assert.deepEqual(commandLine.split(/\s+/), registered)
 })
 
 function waitForChild(child, timeoutMs) {

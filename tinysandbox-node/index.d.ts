@@ -154,6 +154,36 @@ export type VfsErrno =
   | 'ENOTDIR'
   | 'ENOTEMPTY'
 
+/**
+ * Prompt chunks for agent system prompts. Each chunk is a short,
+ * self-contained block describing one part of the sandbox; pick the chunks
+ * that match your sandbox configuration and join them with blank lines.
+ *
+ * Skip `syscalls` when no syscalls are registered and `fetch` when no fetch
+ * handler is set. Include exactly one of `sessionEphemeral` or
+ * `sessionPersistent` depending on the `persistSession` option.
+ */
+export declare const prompts: {
+  /** What the environment is and its hard boundaries. */
+  readonly overview: string
+  /** The supported shell subset and what fails to parse. */
+  readonly shell: string
+  /** The available commands (the `js` command is introduced by `js`). */
+  readonly builtins: string
+  /** The supported jq CLI subset. */
+  readonly jq: string
+  /** The `js` command and its Node-compatible runtime, including the fs API. */
+  readonly js: string
+  /** Host syscalls exposed to sandboxed JavaScript as sandbox.<name>(). */
+  readonly syscalls: string
+  /** The fetch capability inside sandboxed JavaScript. */
+  readonly fetch: string
+  /** Session behavior with the default per-exec cwd/env reset. */
+  readonly sessionEphemeral: string
+  /** Session behavior when `persistSession` is enabled. */
+  readonly sessionPersistent: string
+}
+
 export declare function runConformance(
   vfsFactory: (quota: VfsQuota) => JsVfs | Promise<JsVfs>
 ): Promise<{ ok: true; snapshots: 'unsupported' }>

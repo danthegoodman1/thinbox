@@ -342,7 +342,20 @@ function normalizeNativeErrno(err) {
   return errnos.includes(prefix) ? prefix : 'EINVAL'
 }
 
+const prompts = Object.freeze({
+  overview: native.PROMPT_OVERVIEW,
+  shell: native.PROMPT_SHELL,
+  builtins: native.PROMPT_BUILTINS,
+  jq: native.PROMPT_JQ,
+  js: native.PROMPT_JS,
+  syscalls: native.PROMPT_SYSCALLS,
+  fetch: native.PROMPT_FETCH,
+  sessionEphemeral: native.PROMPT_SESSION_EPHEMERAL,
+  sessionPersistent: native.PROMPT_SESSION_PERSISTENT
+})
+
 exports.NativeSandbox = native.NativeSandbox
 exports.SandboxFs = SandboxFs
 exports.Sandbox = Sandbox
 exports.runConformance = runConformance
+exports.prompts = prompts
