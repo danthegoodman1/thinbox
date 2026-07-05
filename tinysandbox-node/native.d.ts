@@ -76,6 +76,24 @@ export interface ExecResult {
   peakWasmMemoryBytes?: number
 }
 
+export interface FetchCallbackResponse {
+  response?: FetchResponse
+  error?: SyscallCallbackError
+}
+
+export interface FetchRequest {
+  url: string
+  method: string
+  headers: Array<Array<string>>
+  body?: Buffer
+}
+
+export interface FetchResponse {
+  status?: number
+  headers?: Array<Array<string>>
+  body?: Buffer
+}
+
 export interface FileStat {
   fileType: string
   len: number
@@ -97,6 +115,16 @@ export declare function runConformance(factory: (arg: [VfsQuotaJs]) => Promise<J
 export interface SandboxStats {
   commandsRun: number
   vfs?: VfsStatsJs
+}
+
+export interface SyscallCallbackError {
+  message?: string
+  code?: string
+}
+
+export interface SyscallCallbackResponse {
+  value?: any
+  error?: SyscallCallbackError
 }
 
 export interface VfsCallbackError {

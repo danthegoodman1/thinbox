@@ -60,6 +60,10 @@ console.assert(result.stdout === '1\n')
 - [Custom commands](#custom-commands)
   - [Rust](#rust-3)
   - [TypeScript](#typescript-3)
+- [JavaScript host capabilities](#javascript-host-capabilities)
+  - [Syscalls](#syscalls)
+  - [JavaScript prelude](#javascript-prelude)
+  - [Fetch](#fetch)
 - [Bring your own VFS](#bring-your-own-vfs)
   - [Rust](#rust-4)
   - [TypeScript](#typescript-4)
@@ -243,13 +247,16 @@ identical output):
 | `fs` (sync) | `readFileSync`, `writeFileSync`, `appendFileSync`, `mkdirSync`, `readdirSync` (incl. `withFileTypes`), `statSync`, `renameSync`, `rmSync`, `unlinkSync`, `rmdirSync`, `existsSync`, `copyFileSync`, `openSync`, `readSync`, `writeSync`, `ftruncateSync`, `closeSync` |
 | `require` | Relative/absolute CommonJS: `./x`, `../x`, `/x`, extension inference (`.js`, `.json`), `dir/index.js`, module cache, Node cycle semantics, `module.exports`/`exports` aliasing, `require.main`, `MODULE_NOT_FOUND` shapes |
 | Globals | `console.log/info/warn/error` (Node formatting incl. `%s %d %j`-style substitution), `process.argv/env/cwd()/exit()`, `__filename`, `__dirname`, `Buffer` (`from`, `alloc`, `isBuffer`, `toString('utf8'/'hex'/'base64')`) |
+| Fetch | WHATWG-subset `fetch`, `Headers`, and `Response` backed only by an embedder-provided handler |
 | Errors | Node-shaped: `.code` (`'ENOENT'`...), libuv-faithful `.errno`, `.syscall`, `.path`, messages like `ENOENT: no such file or directory, open '/x'` |
-| Limits | Per-run memory cap (default 64 MB) with clean OOM errors, CPU deadline via epoch interruption (`while(true){}` exits 124), catchable `RangeError` on stack exhaustion |
+| Limits | Per-run memory cap (default 64 MB) with clean OOM errors, CPU deadline via epoch interruption (`while(true){}` exits 124), fetch response body cap, catchable `RangeError` on stack exhaustion |
 
-Not there on purpose: async APIs, event loop, timers, network, and
+Not there on purpose: timers, an event loop, direct networking, and
 `node_modules` resolution — bare `require('lodash')` tells you plainly that
-there is no npm in the sandbox. All file access goes through the same VFS
-and quotas as the shell. Known cosmetic deviations (stack-frame naming,
+there is no npm in the sandbox. Async is intentionally narrow: already-settled
+microtasks drain before exit, and `fetch` is available only through an
+embedder-granted handler. All file access goes through the same VFS and quotas
+as the shell. Known deviations (fetch subset details, stack-frame naming,
 line-1 column offsets) are documented in the `js` module docs.
 
 ## Custom commands
@@ -301,6 +308,178 @@ console.assert(result.stdout === '      2\n')
 This is the intended way to expose tools to an agent — file converters,
 linters, API bridges — while the sandbox contains everything the agent's
 own code does with the results.
+
+## JavaScript host capabilities
+
+The `js` runtime can receive a smaller capability surface than a whole shell
+command. Register host syscalls for synchronous `sandbox.*` functions, add a
+prelude to shape the guest API, and grant `fetch` only when you want agent JS
+to reach an embedder-provided transport.
+
+### Syscalls
+
+Syscalls are async host functions registered by name. The guest sees them as
+synchronous `sandbox.<name>(args)` functions that JSON round-trip one value in
+and one value out. Names must match `[A-Za-z_][A-Za-z0-9_]*`; `fetch` is
+reserved for the global fetch transport.
+
+The generated `sandbox` object is enumerable, so `Object.keys(sandbox)` gives
+the script a discoverable list of granted capabilities, similar to how `/bin`
+is synthesized from the command registry.
+
+**Rust**
+
+```rust no_run
+use serde_json::json;
+use tinysandbox::sandbox::{Sandbox, SyscallError};
+
+#[tokio::main]
+async fn main() {
+    let sandbox = Sandbox::builder()
+        .syscall("kv_get", |args| async move {
+            let key = args["key"].as_str().ok_or_else(|| {
+                SyscallError::new("key is required").with_code("E_KEY")
+            })?;
+            Ok(json!({ "value": format!("value-for-{key}") }))
+        })
+        .build();
+
+    let result = sandbox
+        .exec("js -e 'console.log(Object.keys(sandbox).join(\",\")); console.log(sandbox.kv_get({ key: \"a\" }).value)'")
+        .await;
+    assert_eq!(result.stdout, "kv_get\nvalue-for-a\n");
+}
+```
+
+**TypeScript**
+
+```ts
+import { Sandbox } from '@tinysandbox/tinysandbox'
+
+const sandbox = new Sandbox({
+  syscalls: {
+    kvGet: async ({ key }) => ({ value: `value-for-${key}` })
+  }
+})
+
+const result = await sandbox.exec(
+  `js -e 'console.log(Object.keys(sandbox).join(",")); console.log(sandbox.kvGet({ key: "a" }).value)'`
+)
+console.assert(result.stdout === 'kvGet\nvalue-for-a\n')
+```
+
+If a handler throws or returns an error, sandboxed JS receives a normal
+`Error`. A string `code` property on the thrown error is copied to
+`err.code`. Returned values must be JSON values; non-JSON-serializable Node
+returns fail the syscall.
+
+### JavaScript prelude
+
+`js_prelude` / `jsPrelude` is evaluated after tinysandbox installs its host
+bindings and before the agent script. It runs before CommonJS globals exist,
+so use it to define globals or wrap capabilities, not to `require()` modules.
+
+**Rust**
+
+```rust no_run
+use serde_json::json;
+use tinysandbox::sandbox::Sandbox;
+
+#[tokio::main]
+async fn main() {
+    let sandbox = Sandbox::builder()
+        .syscall("secret_get", |_args| async { Ok(json!({ "value": "redacted" })) })
+        .js_prelude(
+            "const secretGet = sandbox.secret_get; \
+             globalThis.readSecret = () => secretGet({}).value; \
+             delete globalThis.sandbox",
+        )
+        .build();
+
+    let result = sandbox
+        .exec("js -e 'console.log(readSecret(), typeof sandbox)'")
+        .await;
+    assert_eq!(result.stdout, "redacted undefined\n");
+}
+```
+
+**TypeScript**
+
+```ts
+import { Sandbox } from '@tinysandbox/tinysandbox'
+
+const sandbox = new Sandbox({
+  syscalls: {
+    secretGet: () => ({ value: 'redacted' })
+  },
+  jsPrelude: 'const secretGet = sandbox.secretGet; globalThis.readSecret = () => secretGet({}).value; delete globalThis.sandbox'
+})
+
+const result = await sandbox.exec("js -e 'console.log(readSecret(), typeof sandbox)'")
+console.assert(result.stdout === 'redacted undefined\n')
+```
+
+### Fetch
+
+`fetch` is not an HTTP client built into the crate. It is a guest API backed
+by a handler you provide, so the host decides whether URLs map to HTTP,
+service calls, fixtures, object storage, or nothing at all. Without a handler,
+`fetch()` rejects with a network-unavailable cause.
+
+The guest receives a WHATWG-style subset: `fetch`, `Headers`, `Response`, and
+body helpers such as `text()`, `json()`, and `arrayBuffer()`. Streams,
+`AbortController`, redirects, and the full browser/undici surface are outside
+the subset; see the `js` module docs for precise deviations.
+`Limits::fetch_response_bytes` / `limits.fetchResponseBytes` caps the response
+body accepted from the host before it reaches the guest.
+
+**Rust**
+
+```rust no_run
+use tinysandbox::sandbox::{FetchResponse, Sandbox, SyscallError};
+
+#[tokio::main]
+async fn main() {
+    let sandbox = Sandbox::builder()
+        .fetch(|request| async move {
+            if request.url == "https://example.test/config" {
+                Ok(FetchResponse {
+                    status: 200,
+                    headers: vec![("content-type".to_owned(), "application/json".to_owned())],
+                    body: br#"{"ok":true}"#.to_vec(),
+                })
+            } else {
+                Err(SyscallError::new("no route").with_code("ENOENT"))
+            }
+        })
+        .build();
+
+    let result = sandbox
+        .exec("js -e 'fetch(\"https://example.test/config\").then(r => r.json()).then(v => console.log(v.ok))'")
+        .await;
+    assert_eq!(result.stdout, "true\n");
+}
+```
+
+**TypeScript**
+
+```ts
+import { Sandbox } from '@tinysandbox/tinysandbox'
+
+const sandbox = new Sandbox({
+  limits: { fetchResponseBytes: 1024 * 1024 },
+  fetch: async ({ url, body }) => ({
+    status: 200,
+    headers: [['content-type', 'text/plain']],
+    body: `echo ${url} ${body?.toString('utf8') ?? ''}`
+  })
+})
+
+const result = await sandbox.exec(
+  `js -e 'fetch("https://example.test/echo", { method: "POST", body: Buffer.from("hi") }).then(r => r.text()).then(console.log)'`
+)
+console.assert(result.stdout === 'echo https://example.test/echo hi\n')
+```
 
 ## Bring your own VFS
 
@@ -434,8 +613,9 @@ VFS adapters can still validate the non-snapshot contract with
 
 Every `Sandbox` enforces wall-clock timeouts (exit 124, like GNU `timeout`),
 stdout/stderr caps with head+tail truncation, a per-exec command budget,
-VFS byte/file quotas (surfacing as `ENOSPC`), and a wasm memory cap for JS.
-All configurable via `Limits`:
+VFS byte/file quotas (surfacing as `ENOSPC`), a wasm memory cap for JS, and a
+fetch response body cap for embedder-backed `fetch`. All configurable via
+`Limits`:
 
 #### Rust
 
@@ -448,6 +628,7 @@ fn main() {
         .limits(Limits {
             wall_time: Duration::from_secs(5),
             wasm_memory_bytes: 32 * 1024 * 1024,
+            fetch_response_bytes: 1024 * 1024,
             ..Limits::default()
         })
         .build();
@@ -462,7 +643,8 @@ import { Sandbox } from '@tinysandbox/tinysandbox'
 const sandbox = new Sandbox({
   limits: {
     wallTimeMs: 5000,
-    wasmMemoryBytes: 32 * 1024 * 1024
+    wasmMemoryBytes: 32 * 1024 * 1024,
+    fetchResponseBytes: 1024 * 1024
   }
 })
 ```
@@ -532,6 +714,8 @@ Runnable with `cargo run --example <name>`:
   command and composing it with builtins
 - [`js_scripts`](https://github.com/danthegoodman1/tinysandbox/blob/main/examples/js_scripts.rs) — multi-file JS with `require`,
   the `fs` API, and a look at limits and metrics
+- [`js_syscalls`](https://github.com/danthegoodman1/tinysandbox/blob/main/examples/js_syscalls.rs) — host syscalls,
+  prelude wrappers, and embedder-backed fetch
 
 Runnable with `npm --prefix tinysandbox-node run examples` after the package
 dependencies are installed:
@@ -539,6 +723,7 @@ dependencies are installed:
 - `quickstart.ts` — sessions, pipelines, redirects, and host reads
 - `custom_command.ts` — registering a TypeScript host command
 - `js_scripts.ts` — multi-file sandboxed JS with limits and metrics
+- `js_syscalls.ts` — TypeScript syscalls, prelude wrappers, and fetch transport
 - `js_vfs.ts` — TypeScript-backed VFS callbacks plus `runConformance`
 
 ## License

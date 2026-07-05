@@ -33,3 +33,7 @@ js = ["dep:base64", "dep:serde", "dep:serde_json", "dep:wasmtime"]
 [[example]]
 name = "js_scripts"
 required-features = ["js"]
+
+[[example]]
+name = "js_syscalls"
+required-features = ["js"]

@@ -9,9 +9,11 @@ use napi::bindgen_prelude::{
 use napi::threadsafe_function::ThreadsafeFunction;
 use napi::{Error, JsExternal, Result, Status, Task};
 use napi_derive::napi;
+use serde_json::Value;
 use tinysandbox::sandbox::{
-    Command, CommandContext, CommandFuture, CommandResult, ExecResult as CoreExecResult, Limits,
-    Sandbox as CoreSandbox,
+    Command, CommandContext, CommandFuture, CommandResult, ExecResult as CoreExecResult,
+    FetchRequest as CoreFetchRequest, FetchResponse as CoreFetchResponse, Limits,
+    Sandbox as CoreSandbox, SyscallError,
 };
 use tinysandbox::vfs::{
     DirEntry, Errno, FileHandle, FileType, Metadata, OpenMode, Vfs, VfsError, VfsQuota, VfsResult,
@@ -21,6 +23,18 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 type JsCommandCallback = Arc<
     ThreadsafeFunction<CommandCall, Promise<CommandOutput>, (CommandCall,), Status, false, true>,
+>;
+type JsSyscallCallback =
+    Arc<ThreadsafeFunction<Value, Promise<SyscallCallbackResponse>, (Value,), Status, false, true>>;
+type JsFetchCallback = Arc<
+    ThreadsafeFunction<
+        FetchRequest,
+        Promise<FetchCallbackResponse>,
+        (FetchRequest,),
+        Status,
+        false,
+        true,
+    >,
 >;
 type JsVfsCallback =
     Arc<ThreadsafeFunction<VfsRequest, Promise<VfsResponse>, (VfsRequest,), Status, false, true>>;
@@ -56,6 +70,42 @@ impl Sandbox {
             }
             if let Some(persist) = get_optional::<bool>(&options, "persistSession")? {
                 builder = builder.persist_session(persist);
+            }
+            if let Some(syscalls) = get_optional_object(&options, "syscalls")? {
+                for name in Object::keys(&syscalls)? {
+                    validate_syscall_name(&name)?;
+                    let callback: Function<'_, (Value,), Promise<SyscallCallbackResponse>> =
+                        syscalls.get_named_property(&name)?;
+                    let callback = Arc::new(
+                        callback
+                            .build_threadsafe_function::<Value>()
+                            .callee_handled::<false>()
+                            .weak::<true>()
+                            .build_callback(|ctx| Ok((ctx.value,)))?,
+                    );
+                    builder = builder.syscall(name, move |args| {
+                        let callback = Arc::clone(&callback);
+                        async move { call_js_syscall(callback, args).await }
+                    });
+                }
+            }
+            if let Some(js_prelude) = get_optional::<String>(&options, "jsPrelude")? {
+                builder = builder.js_prelude(js_prelude);
+            }
+            if options.has_named_property("fetch")? {
+                let fetch: Function<'_, (FetchRequest,), Promise<FetchCallbackResponse>> =
+                    options.get_named_property("fetch")?;
+                let callback = Arc::new(
+                    fetch
+                        .build_threadsafe_function::<FetchRequest>()
+                        .callee_handled::<false>()
+                        .weak::<true>()
+                        .build_callback(|ctx| Ok((ctx.value,)))?,
+                );
+                builder = builder.fetch(move |request| {
+                    let callback = Arc::clone(&callback);
+                    async move { call_js_fetch(callback, request).await }
+                });
             }
             if let Some(vfs) = get_optional_object(&options, "vfs")? {
                 builder = builder.vfs_arc(Arc::new(JsVfs::new(vfs)?));
@@ -300,6 +350,78 @@ async fn write_command_error(
         .write_all(format!("tinysandbox-node: custom command failed: {reason}\n").as_bytes())
         .await;
     CommandResult::failure()
+}
+
+async fn call_js_syscall(
+    callback: JsSyscallCallback,
+    args: Value,
+) -> std::result::Result<Value, SyscallError> {
+    let promise = callback
+        .call_async_catch(args)
+        .await
+        .map_err(|err| SyscallError::new(err.reason))?;
+    let response = promise.await.map_err(|err| SyscallError::new(err.reason))?;
+    if let Some(error) = response.error {
+        return Err(syscall_error_from_callback(error));
+    }
+    Ok(response.value.unwrap_or(Value::Null))
+}
+
+async fn call_js_fetch(
+    callback: JsFetchCallback,
+    request: CoreFetchRequest,
+) -> std::result::Result<CoreFetchResponse, SyscallError> {
+    let promise = callback
+        .call_async_catch(FetchRequest::from(request))
+        .await
+        .map_err(|err| SyscallError::new(err.reason))?;
+    let response = promise.await.map_err(|err| SyscallError::new(err.reason))?;
+    if let Some(error) = response.error {
+        return Err(syscall_error_from_callback(error));
+    }
+    let response = response
+        .response
+        .ok_or_else(|| SyscallError::new("fetch handler did not return a response"))?;
+    Ok(CoreFetchResponse {
+        status: status_from_js(response.status)?,
+        headers: header_pairs_from_js(response.headers.unwrap_or_default())?,
+        body: response.body.map(|body| body.to_vec()).unwrap_or_default(),
+    })
+}
+
+fn syscall_error_from_callback(error: SyscallCallbackError) -> SyscallError {
+    let message = error
+        .message
+        .unwrap_or_else(|| "host callback failed".to_owned());
+    match error.code {
+        Some(code) => SyscallError::new(message).with_code(code),
+        None => SyscallError::new(message),
+    }
+}
+
+fn status_from_js(status: Option<f64>) -> std::result::Result<u16, SyscallError> {
+    let status = status.ok_or_else(|| SyscallError::new("fetch response status is required"))?;
+    if status.is_finite() && status.fract() == 0.0 && (100.0..=599.0).contains(&status) {
+        Ok(status as u16)
+    } else {
+        Err(SyscallError::new(
+            "fetch response status must be an integer from 100 through 599",
+        ))
+    }
+}
+
+fn header_pairs_from_js(
+    headers: Vec<Vec<String>>,
+) -> std::result::Result<Vec<(String, String)>, SyscallError> {
+    headers
+        .into_iter()
+        .map(|pair| match pair.as_slice() {
+            [name, value] => Ok((name.clone(), value.clone())),
+            _ => Err(SyscallError::new(
+                "fetch response headers must be [name, value] pairs",
+            )),
+        })
+        .collect()
 }
 
 struct JsVfs {
@@ -645,6 +767,54 @@ pub struct CommandOutput {
 }
 
 #[napi(object)]
+pub struct SyscallCallbackResponse {
+    pub value: Option<Value>,
+    pub error: Option<SyscallCallbackError>,
+}
+
+#[napi(object)]
+pub struct SyscallCallbackError {
+    pub message: Option<String>,
+    pub code: Option<String>,
+}
+
+#[napi(object)]
+pub struct FetchRequest {
+    pub url: String,
+    pub method: String,
+    pub headers: Vec<Vec<String>>,
+    pub body: Option<Buffer>,
+}
+
+impl From<CoreFetchRequest> for FetchRequest {
+    fn from(request: CoreFetchRequest) -> Self {
+        Self {
+            url: request.url,
+            method: request.method,
+            headers: request
+                .headers
+                .into_iter()
+                .map(|(name, value)| vec![name, value])
+                .collect(),
+            body: request.body.map(Buffer::from),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct FetchCallbackResponse {
+    pub response: Option<FetchResponse>,
+    pub error: Option<SyscallCallbackError>,
+}
+
+#[napi(object)]
+pub struct FetchResponse {
+    pub status: Option<f64>,
+    pub headers: Option<Vec<Vec<String>>>,
+    pub body: Option<Buffer>,
+}
+
+#[napi(object)]
 #[derive(Default)]
 pub struct VfsRequest {
     pub path: Option<String>,
@@ -902,7 +1072,35 @@ fn parse_limits(limits: Object<'_>) -> Result<Limits> {
     if let Some(bytes) = get_optional::<f64>(&limits, "wasmMemoryBytes")? {
         parsed.wasm_memory_bytes = usize_from_number(bytes)?;
     }
+    if let Some(bytes) = get_optional::<f64>(&limits, "fetchResponseBytes")? {
+        parsed.fetch_response_bytes = usize_from_number(bytes)?;
+    }
     Ok(parsed)
+}
+
+fn validate_syscall_name(name: &str) -> Result<()> {
+    if !is_js_syscall_name(name) {
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!(
+                "Sandbox constructor cannot register invalid syscall name '{name}'; names must match [A-Za-z_][A-Za-z0-9_]*"
+            ),
+        ));
+    }
+    if name == "fetch" {
+        return Err(Error::new(
+            Status::InvalidArg,
+            "Sandbox constructor cannot register reserved syscall name 'fetch'; use the fetch option"
+                .to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_js_syscall_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 fn get_optional<T>(object: &Object<'_>, name: &str) -> Result<Option<T>>

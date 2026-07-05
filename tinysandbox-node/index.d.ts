@@ -34,6 +34,9 @@ export interface SandboxOptions {
   cwd?: string
   persistSession?: boolean
   commands?: Record<string, JsCommand>
+  syscalls?: Record<string, JsSyscall>
+  jsPrelude?: string
+  fetch?: JsFetch
   vfs?: JsVfs
 }
 
@@ -46,6 +49,7 @@ export interface LimitsOptions {
   maxCommands?: number
   sortInputBytes?: number
   wasmMemoryBytes?: number
+  fetchResponseBytes?: number
 }
 
 export type JsCommand = (call: CommandCall) => Promise<CommandOutput> | CommandOutput
@@ -61,6 +65,33 @@ export interface CommandOutput {
   exitCode?: number
   stdout?: Buffer | Uint8Array | string
   stderr?: Buffer | Uint8Array | string
+}
+
+/** Host function exposed to sandboxed JavaScript as synchronous sandbox.<name>(args). */
+export type JsSyscall = (args: unknown) => Promise<JsonValue> | JsonValue
+
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | Array<JsonValue>
+  | { [key: string]: JsonValue }
+
+/** Host transport used by sandboxed JavaScript fetch(). */
+export type JsFetch = (request: FetchRequest) => Promise<FetchResponse> | FetchResponse
+
+export interface FetchRequest {
+  url: string
+  method: string
+  headers: Array<[string, string]>
+  body: Buffer | null
+}
+
+export interface FetchResponse {
+  status: number
+  headers?: Array<[string, string]>
+  body?: Buffer | string
 }
 
 export interface JsVfs {

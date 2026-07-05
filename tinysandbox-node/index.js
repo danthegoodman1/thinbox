@@ -21,6 +21,10 @@ function normalizeOptions(options) {
   const normalized = { ...options }
   if (options.commands) normalized.commands = wrapCommands(options.commands)
   else delete normalized.commands
+  if (options.syscalls) normalized.syscalls = wrapSyscalls(options.syscalls)
+  else delete normalized.syscalls
+  if (options.fetch) normalized.fetch = wrapFetch(options.fetch)
+  else delete normalized.fetch
   if (options.vfs) normalized.vfs = wrapVfs(options.vfs)
   else delete normalized.vfs
   return normalized
@@ -43,6 +47,36 @@ function wrapCommands(commands) {
       }
     ])
   )
+}
+
+function wrapSyscalls(syscalls) {
+  return Object.fromEntries(
+    Object.entries(syscalls).map(([name, syscall]) => {
+      validateSyscallName(name)
+      if (typeof syscall !== 'function') throw new TypeError(`syscall '${name}' must be a function`)
+      return [
+        name,
+        async (args) => {
+          try {
+            return { value: normalizeJsonValue(await syscall(firstArgument(args))) }
+          } catch (err) {
+            return { error: callbackErrorPayload(err) }
+          }
+        }
+      ]
+    })
+  )
+}
+
+function wrapFetch(fetch) {
+  if (typeof fetch !== 'function') throw new TypeError('fetch must be a function')
+  return async (request) => {
+    try {
+      return { response: normalizeFetchResponse(await fetch(normalizeFetchRequest(firstArgument(request)))) }
+    } catch (err) {
+      return { error: callbackErrorPayload(err) }
+    }
+  }
 }
 
 function wrapVfs(vfs) {
@@ -83,6 +117,88 @@ function firstArgument(value) {
   return value && typeof value === 'object' && Object.hasOwn(value, '0') ? value[0] : value
 }
 
+function validateSyscallName(name) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    throw new TypeError(`invalid syscall name '${name}'; names must match [A-Za-z_][A-Za-z0-9_]*`)
+  }
+  if (name === 'fetch') {
+    throw new TypeError("reserved syscall name 'fetch'; use the fetch option")
+  }
+}
+
+function normalizeJsonValue(value) {
+  validateJsonValue(value, new Set())
+  return JSON.parse(JSON.stringify(value))
+}
+
+function validateJsonValue(value, seen) {
+  if (value === null) return
+  if (typeof value === 'string' || typeof value === 'boolean') return
+  if (typeof value === 'number') {
+    if (Number.isFinite(value)) return
+    throw new TypeError('syscall return value must contain only finite numbers')
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) throw new TypeError('syscall return value must not contain cycles')
+    seen.add(value)
+    for (const item of value) validateJsonValue(item, seen)
+    seen.delete(value)
+    return
+  }
+  if (typeof value === 'object') {
+    const proto = Object.getPrototypeOf(value)
+    if (proto !== Object.prototype && proto !== null) {
+      throw new TypeError('syscall return value must contain only JSON objects, arrays, and scalars')
+    }
+    if (seen.has(value)) throw new TypeError('syscall return value must not contain cycles')
+    seen.add(value)
+    for (const item of Object.values(value)) validateJsonValue(item, seen)
+    seen.delete(value)
+    return
+  }
+  throw new TypeError('syscall return value must be JSON-serializable')
+}
+
+function normalizeFetchRequest(request) {
+  return {
+    url: request.url,
+    method: request.method,
+    headers: normalizeHeaderPairs(request.headers ?? []),
+    body: request.body == null ? null : Buffer.from(request.body)
+  }
+}
+
+function normalizeFetchResponse(response) {
+  if (!response || typeof response !== 'object') {
+    throw new TypeError('fetch handler must return a response object')
+  }
+  return {
+    status: response.status,
+    headers: response.headers === undefined ? undefined : normalizeHeaderPairs(response.headers),
+    body: normalizeFetchBody(response.body)
+  }
+}
+
+function normalizeHeaderPairs(headers) {
+  if (!Array.isArray(headers)) throw new TypeError('headers must be an array of [name, value] pairs')
+  return headers.map((pair) => {
+    if (!Array.isArray(pair) || pair.length !== 2) {
+      throw new TypeError('headers must be an array of [name, value] pairs')
+    }
+    const [name, value] = pair
+    if (typeof name !== 'string' || typeof value !== 'string') {
+      throw new TypeError('header names and values must be strings')
+    }
+    return [name, value]
+  })
+}
+
+function normalizeFetchBody(body) {
+  if (body === undefined || body === null) return undefined
+  if (typeof body === 'string') return Buffer.from(body, 'utf8')
+  return Buffer.from(body)
+}
+
 function normalizeCommandOutput(output = {}) {
   return {
     exitCode: output.exitCode ?? 0,
@@ -106,6 +222,13 @@ function normalizeVfsResponse(name, response) {
 function errorPayload(err) {
   return {
     code: normalizeErrnoCode(err?.code),
+    message: err?.message ?? String(err)
+  }
+}
+
+function callbackErrorPayload(err) {
+  return {
+    code: typeof err?.code === 'string' ? err.code : undefined,
     message: err?.message ?? String(err)
   }
 }

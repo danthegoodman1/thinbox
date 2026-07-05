@@ -143,6 +143,139 @@ test('Node e2e pipeline can cat into the sandboxed js command', async () => {
   assert.equal(result.stdout, 'ABC\n')
 })
 
+test('JS syscalls round-trip JSON values through Node handlers', async () => {
+  // Generated sandbox.<name> functions synchronously call the async Node host callback.
+  const sandbox = new Sandbox({
+    syscalls: {
+      inspect: async (args) => {
+        assert.deepEqual(args, { value: 7 })
+        return { doubled: args.value * 2, nested: [true, null, 'ok'] }
+      }
+    }
+  })
+  const result = await sandbox.exec("js -e 'const out = sandbox.inspect({ value: 7 }); console.log(JSON.stringify(out))'")
+  assert.equal(result.exitCode, 0, result.stderr)
+  assert.equal(result.stdout, '{"doubled":14,"nested":[true,null,"ok"]}\n')
+})
+
+test('JS syscall handler errors preserve string code fields', async () => {
+  // Thrown Node errors become guest Error objects with message and optional code.
+  const sandbox = new Sandbox({
+    syscalls: {
+      deny: () => {
+        const err = new Error('denied by host')
+        err.code = 'E_DENIED'
+        throw err
+      }
+    }
+  })
+  const script = `
+try {
+  sandbox.deny({ id: 1 })
+} catch (err) {
+  console.log(err.message)
+  console.log(err.code)
+}
+`
+  const result = await sandbox.exec(`js -e ${singleQuote(script)}`)
+  assert.equal(result.exitCode, 0, result.stderr)
+  assert.equal(result.stdout, 'denied by host\nE_DENIED\n')
+})
+
+test('jsPrelude can wrap a Node-backed syscall', async () => {
+  // The prelude can expose a narrower global and hide the generated sandbox object.
+  const sandbox = new Sandbox({
+    syscalls: {
+      kvGet: ({ key }) => ({ value: key === 'answer' ? 42 : null })
+    },
+    jsPrelude: 'const kvGet = sandbox.kvGet; globalThis.getAnswer = () => kvGet({ key: "answer" }).value; delete globalThis.sandbox'
+  })
+  const result = await sandbox.exec("js -e 'console.log(getAnswer(), typeof sandbox)'")
+  assert.equal(result.exitCode, 0, result.stderr)
+  assert.equal(result.stdout, '42 undefined\n')
+})
+
+test('fetch calls a Node transport with Buffer request and response bodies', async () => {
+  // Request bytes arrive as Buffer and response bytes return through Response body helpers.
+  const sandbox = new Sandbox({
+    fetch: async (request) => {
+      assert.equal(request.url, 'https://example.test/echo')
+      assert.equal(request.method, 'POST')
+      assert.equal(Buffer.isBuffer(request.body), true)
+      assert.equal(request.body.toString('utf8'), 'ping')
+      assert.deepEqual(request.headers.find(([name]) => name === 'x-token'), ['x-token', 'abc'])
+      return {
+        status: 201,
+        headers: [['content-type', 'text/plain']],
+        body: Buffer.from(`reply:${request.body.toString('utf8')}`)
+      }
+    }
+  })
+  const script = `
+(async () => {
+  const response = await fetch('https://example.test/echo', {
+    method: 'POST',
+    headers: { 'x-token': 'abc' },
+    body: Buffer.from('ping')
+  })
+  console.log(response.status)
+  console.log(response.headers.get('content-type'))
+  console.log(await response.text())
+})()
+`
+  const result = await sandbox.exec(`js -e ${singleQuote(script)}`)
+  assert.equal(result.exitCode, 0, result.stderr)
+  assert.equal(result.stdout, '201\ntext/plain\nreply:ping\n')
+})
+
+test('fetch without a Node handler rejects with network unavailable', async () => {
+  // The fetch global exists, but network access is absent until the embedder grants it.
+  const sandbox = new Sandbox()
+  const script = `
+(async () => {
+  try {
+    await fetch('https://example.test/')
+  } catch (err) {
+    console.log(err.name, err.message)
+    console.log(err.cause && err.cause.message)
+  }
+})()
+`
+  const result = await sandbox.exec(`js -e ${singleQuote(script)}`)
+  assert.equal(result.exitCode, 0, result.stderr)
+  assert.match(result.stdout, /^TypeError fetch failed\n/)
+  assert.match(result.stdout, /network is not available/)
+})
+
+test('fetchResponseBytes limits Node fetch response bodies', async () => {
+  // The configured cap is enforced after the Node handler returns bytes.
+  const sandbox = new Sandbox({
+    limits: { fetchResponseBytes: 3 },
+    fetch: () => ({ status: 200, body: Buffer.from('toolong') })
+  })
+  const script = `
+(async () => {
+  try {
+    await fetch('https://example.test/large')
+  } catch (err) {
+    console.log(err.name, err.message)
+    console.log(err.cause && err.cause.message)
+  }
+})()
+`
+  const result = await sandbox.exec(`js -e ${singleQuote(script)}`)
+  assert.equal(result.exitCode, 0, result.stderr)
+  assert.equal(result.stdout, 'TypeError fetch failed\nfetch response body exceeded limit of 3 bytes\n')
+})
+
+test('invalid syscall names throw during Sandbox construction', () => {
+  // Constructor validation prevents Rust builder panics from crossing N-API.
+  assert.throws(
+    () => new Sandbox({ syscalls: { 'bad-name': () => null } }),
+    /invalid syscall name/
+  )
+})
+
 test('direct VFS calls proceed while exec is in flight', async () => {
   // The command bridge must not monopolize the JS event loop while an exec awaits.
   const sandbox = new Sandbox({
@@ -242,4 +375,8 @@ function waitForChild(child, timeoutMs) {
       resolvePromise({ code, stdout, stderr })
     })
   })
+}
+
+function singleQuote(value) {
+  return `'${value.replaceAll("'", "'\\''")}'`
 }
