@@ -1328,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "tinysandbox"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "base64",
  "jaq-core",
@@ -1345,7 +1345,7 @@ dependencies = [
 
 [[package]]
 name = "tinysandbox-node"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "napi",
  "napi-build",
